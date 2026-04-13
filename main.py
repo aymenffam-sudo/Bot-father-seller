@@ -2,7 +2,7 @@ import subprocess, sys, json, os, signal
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
 
-MASTER_TOKEN = "8593915208:AAHTLNiwLsN8uonzRRoP4CJsWgjYvC8IEPY"
+MASTER_TOKEN = "8789785920:AAGWXPlRprQGiJJYQ4dfY60Z-M_VWcY_EUQ"
 OWNER_ID = 6676819684
 BOTS_DATA = "active_bots.json"
 
