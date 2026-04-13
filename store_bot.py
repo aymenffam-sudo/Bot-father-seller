@@ -1,8 +1,11 @@
 import sys, json, os, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, 
+    filters, ContextTypes, CallbackQueryHandler
+)
 
-# إعدادات تلقائية من بوت الأب
+# --- إعدادات البوت الفرعي (تلقائية من الأب) ---
 if len(sys.argv) > 2:
     BOT_TOKEN = sys.argv[1]
     OWNER_ID = int(sys.argv[2])
@@ -11,72 +14,96 @@ else:
     OWNER_ID = 6676819684
 
 DB_FILE = f"db_{BOT_TOKEN.split(':')[0]}.json"
-CHANNEL_ID = "@YourChannel" # يوزر قناتك
-FOOTER = "\n\n**Ben 10 🍀**"
+CHANNEL_ID = "@YourChannel" # استبدله بيوزر قناتك (مثال: @ben10_store)
+FOOTER = "\n\n*Ben 10 🍀*"
 
-# --- إدارة قاعدة البيانات ---
+logging.basicConfig(level=logging.INFO)
+
+# --- إدارة البيانات ---
 def load_db():
     if not os.path.exists(DB_FILE):
-        return {"users": {}, "admins": [], "owners": [OWNER_ID], "coupons": {}, "prices": {"منتج_1": 50}}
-    with open(DB_FILE, "r") as f: return json.load(f)
+        return {"users": {}, "admins": [], "owners": [OWNER_ID], "coupons": {}, "prices": {"منتج 1": 100}}
+    try:
+        with open(DB_FILE, "r") as f: return json.load(f)
+    except: return {"users": {}, "admins": [], "owners": [OWNER_ID], "coupons": {}, "prices": {"منتج 1": 100}}
 
 def save_db(db):
     with open(DB_FILE, "w") as f: json.dump(db, f, indent=4)
 
-# --- التحقق من الاشتراك ---
-async def is_subbed(update, ctx):
+# --- التحقق من الاشتراك الإجباري ---
+async def check_sub(update, ctx):
     try:
         member = await ctx.bot.get_chat_member(CHANNEL_ID, update.effective_user.id)
         return member.status not in ['left', 'kicked']
-    except: return True # لتجنب التوقف إذا لم يكن البوت أدمن
+    except: return True # إذا لم يكن البوت أدمن في القناة سيتخطى الفحص
 
-# --- الأوامر الرئيسية ---
+# --- القائمة الرئيسية ---
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     db = load_db()
     
+    # تسجيل المستخدم الجديد ونظام الإحالة
     if uid not in db["users"]:
         db["users"][uid] = {"points": 0, "balance": 0}
-        if ctx.args: # نظام الإحالة (احلب أصدقاءك)
+        if ctx.args:
             ref_id = ctx.args[0]
             if ref_id in db["users"] and ref_id != uid:
-                db["users"][ref_id]["points"] += 1
+                db["users"][ref_id]["points"] += 1 # نقطة لكل شخص
     save_db(db)
 
-    if not await is_subbed(update, ctx):
-        btn = [[InlineKeyboardButton("📢 اشترك هنا", url=f"https://t.me/{CHANNEL_ID[1:]}")]]
-        await update.message.reply_text("❌ يجب الاشتراك بالقناة أولاً!", reply_markup=InlineKeyboardMarkup(btn))
+    # فحص الاشتراك
+    if not await check_sub(update, ctx):
+        btn = [[InlineKeyboardButton("📢 اشترك في القناة", url=f"https://t.me/{CHANNEL_ID[1:]}")],
+               [InlineKeyboardButton("✅ تم الاشتراك", callback_data="start_cmd")]]
+        await update.message.reply_text(f"⚠️ *عذراً! يجب الاشتراك في القناة أولاً:* {CHANNEL_ID}", 
+                                       reply_markup=InlineKeyboardMarkup(btn), parse_mode="Markdown")
         return
 
     btns = [
-        [InlineKeyboardButton("👤 حسابي", callback_data="me"), InlineKeyboardButton("🎁 المتجر", callback_data="shop")],
-        [InlineKeyboardButton("🔗 رابط الدعوة", callback_data="ref"), InlineKeyboardButton("🎫 كوبون", callback_data="coupon")]
+        [InlineKeyboardButton("👤 حسابي", callback_data="my_acc"), InlineKeyboardButton("🎁 المتجر", callback_data="shop")],
+        [InlineKeyboardButton("🔗 رابط الدعوة", callback_data="ref_link"), InlineKeyboardButton("🎫 كوبون", callback_data="coupon")],
     ]
-    if update.effective_user.id in db["owners"] or update.effective_user.id in db["admins"]:
-        btns.append([InlineKeyboardButton("🛠 لوحة التحكم", callback_data="admin")])
+    
+    # لوحة الإدارة للأدمن والأونر
+    if int(uid) in db["owners"] or int(uid) in db["admins"]:
+        btns.append([InlineKeyboardButton("🛠 لوحة التحكم", callback_data="admin_panel")])
 
-    await update.message.reply_text(f"👋 أهلاً بك في المتجر!\nاستخدم الأزرار أدناه للتنقل." + FOOTER, 
-                                   reply_markup=InlineKeyboardMarkup(btns), parse_mode="Markdown")
+    text = f"*👋 أهلاً بك {update.effective_user.first_name} في المتجر!*\n\nاستخدم الأزرار بالأسفل للتنقل بين الأقسام." + FOOTER
+    
+    if update.message:
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="Markdown")
+    else:
+        await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="Markdown")
 
-# --- لوحة التحكم (رتب أونر وأدمن) ---
-async def admin_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
+# --- معالج الأزرار (هذا ما كان ينقصك) ---
+async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = str(query.from_user.id)
     db = load_db()
-    if uid not in db["owners"] and uid not in db["admins"]: return
 
-    btns = [[InlineKeyboardButton("🎫 صنع كوبون", callback_data="make_c")]]
-    if uid in db["owners"]:
-        btns.append([InlineKeyboardButton("👤 إضافة أدمن", callback_data="add_ad"), InlineKeyboardButton("💰 الأسعار", callback_data="prc")])
-        btns.append([InlineKeyboardButton("📢 إذاعة", callback_data="bc")])
+    if query.data == "my_acc":
+        pts = db["users"][uid]["points"]
+        await query.edit_message_text(f"👤 *معلومات حسابك:*\n\n🔹 *النقاط:* {pts}\n🔹 *الآيدي:* `{uid}`" + FOOTER, 
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="start_cmd")]]), parse_mode="Markdown")
 
-    await update.callback_query.message.edit_text("🛠 لوحة الإدارة:", reply_markup=InlineKeyboardMarkup(btns))
+    elif query.data == "ref_link":
+        bot_user = (await ctx.bot.get_me()).username
+        link = f"https://t.me/{bot_user}?start={uid}"
+        await query.edit_message_text(f"🔗 *رابط الدعوة الخاص بك:*\n\n`{link}`\n\n🎁 *احصل على نقطة مقابل كل صديق يدخل البوت!*" + FOOTER, 
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="start_cmd")]]), parse_mode="Markdown")
 
-# (يمكنك إضافة بقية منطق الكوبونات والأسعار هنا...)
+    elif query.data == "start_cmd":
+        await start(update, ctx)
+
+    # أضف هنا بقية شروط الأزرار (admin_panel, shop, الخ) بنفس الطريقة
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
+    app.add_handler(CallbackQueryHandler(button_handler)) # هذا السطر يربط كل الأزرار بالدالة
+    
     app.run_polling()
 
 if __name__ == "__main__":
