@@ -2,7 +2,7 @@ import sys, json, os, logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, 
-    filters, ContextTypes, CallbackQueryHandler
+    filters, ContextTypes, CallbackQueryHandler, ConversationHandler
 )
 
 # --- الإعدادات ---
@@ -16,6 +16,9 @@ else:
 DB_FILE = f"db_{BOT_TOKEN.split(':')[0]}.json"
 FOOTER = "\n\n*Ben 10 🍀*"
 
+# حالات الانتظار للمدخلات (States)
+WAIT_BC, WAIT_ADD_PTS, WAIT_ADD_AD = range(3)
+
 logging.basicConfig(level=logging.INFO)
 
 def load_db():
@@ -28,19 +31,17 @@ def load_db():
 def save_db(db):
     with open(DB_FILE, "w") as f: json.dump(db, f, indent=4)
 
+# --- القائمة الرئيسية ---
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     db = load_db()
-    
-    if uid not in db["users"]:
-        db["users"][uid] = {"points": 0}
+    if uid not in db["users"]: db["users"][uid] = {"points": 0}
     save_db(db)
 
     btns = [
         [InlineKeyboardButton("👤 حسابي", callback_data="my_acc"), InlineKeyboardButton("🎁 المتجر", callback_data="shop")],
         [InlineKeyboardButton("🔗 رابط الدعوة", callback_data="ref_link"), InlineKeyboardButton("🎫 كوبون", callback_data="coupon")],
     ]
-    
     if int(uid) in db["owners"] or int(uid) in db["admins"]:
         btns.append([InlineKeyboardButton("🛠 لوحة التحكم", callback_data="admin_panel")])
 
@@ -50,7 +51,9 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="Markdown")
     else:
         await update.callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(btns), parse_mode="Markdown")
+    return ConversationHandler.END
 
+# --- معالج الأزرار ---
 async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -58,47 +61,72 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     db = load_db()
 
     if query.data == "start_cmd":
-        await start(update, ctx)
+        return await start(update, ctx)
+
+    elif query.data == "my_acc":
+        pts = db["users"].get(uid, {}).get("points", 0)
+        await query.edit_message_text(f"👤 *حسابك:*\n🔹 نقاطك: `{pts}`", 
+                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ رجوع", callback_data="start_cmd")]]), parse_mode="Markdown")
 
     elif query.data == "admin_panel":
         is_owner = int(uid) in db["owners"]
         is_admin = int(uid) in db["admins"]
-
         if not is_owner and not is_admin: return
 
-        # 1. الرسالة الأولى: لوحة الإدارة العادية (تعديل الرسالة الحالية)
-        admin_btns = [
-            [InlineKeyboardButton("🎫 صنع كوبون", callback_data="make_c")],
-            [InlineKeyboardButton("⬅️ العودة للقائمة", callback_data="start_cmd")]
-        ]
-        await query.edit_message_text("🛠 *لوحة إدارة المتجر (العامة):*", reply_markup=InlineKeyboardMarkup(admin_btns), parse_mode="Markdown")
+        # لوحة الأدمن (تعديل الرسالة)
+        admin_btns = [[InlineKeyboardButton("🎫 صنع كوبون", callback_data="make_c")], [InlineKeyboardButton("⬅️ رجوع", callback_data="start_cmd")]]
+        await query.edit_message_text("🛠 *لوحة الإدارة:*", reply_markup=InlineKeyboardMarkup(admin_btns), parse_mode="Markdown")
 
-        # 2. الرسالة الثانية: لوحة الأونر الشاملة (رسالة جديدة تماماً تصل للأونر فقط)
+        # لوحة الأونر (رسالة جديدة)
         if is_owner:
             owner_btns = [
-                [InlineKeyboardButton("📢 إذاعة للكل", callback_data="bc"), InlineKeyboardButton("👑 إضافة أونر", callback_data="add_ow")],
-                [InlineKeyboardButton("👤 إضافة أدمن", callback_data="add_ad"), InlineKeyboardButton("⚙️ تعديل الأسعار", callback_data="edit_pr")],
-                [InlineKeyboardButton("💰 شحن نقاط", callback_data="add_pts"), InlineKeyboardButton("♻️ تصفير النقاط", callback_data="reset_all")],
-                [InlineKeyboardButton("📢 تعديل الإشتراك", callback_data="edit_sub")]
+                [InlineKeyboardButton("📢 إذاعة", callback_data="start_bc"), InlineKeyboardButton("👤 إضافة أدمن", callback_data="start_add_ad")],
+                [InlineKeyboardButton("💰 شحن نقاط", callback_data="start_add_pts"), InlineKeyboardButton("♻️ تصفير النقاط", callback_data="reset_all")]
             ]
-            # نستخدم bot.send_message لإرسال رسالة جديدة منفصلة
-            await ctx.bot.send_message(
-                chat_id=uid,
-                text="👑 *لوحة التحكم الشاملة (خاصة بالأونر فقط):*\n\nهذه الرسالة تحتوي على صلاحياتك الكاملة لإدارة النظام." + FOOTER,
-                reply_markup=InlineKeyboardMarkup(owner_btns),
-                parse_mode="Markdown"
-            )
+            await ctx.bot.send_message(chat_id=uid, text="👑 *لوحة الأونر الشاملة:*", reply_markup=InlineKeyboardMarkup(owner_btns), parse_mode="Markdown")
 
     elif query.data == "reset_all":
         if int(uid) in db["owners"]:
             for u in db["users"]: db["users"][u]["points"] = 0
             save_db(db)
-            await query.answer("✅ تم تصفير نقاط الجميع بنجاح!", show_alert=True)
+            await query.answer("✅ تم التصفير", show_alert=True)
+
+# --- وظائف الإدخال (الإذاعة والشحن) ---
+async def start_bc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.message.reply_text("📢 *أرسل رسالة الإذاعة الآن:*", parse_mode="Markdown")
+    return WAIT_BC
+
+async def do_bc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    db = load_db()
+    text = update.message.text
+    count = 0
+    for user_id in db["users"]:
+        try:
+            await ctx.bot.send_message(chat_id=user_id, text=f"📢 *إعلان جديد:*\n\n{text}", parse_mode="Markdown")
+            count += 1
+        except: continue
+    await update.message.reply_text(f"✅ تم الإرسال لـ {count} مستخدم.")
+    return ConversationHandler.END
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # استخدام ConversationHandler لربط الأزرار التي تحتاج إدخال نصي
+    admin_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(start_bc, pattern="^start_bc$"),
+            # يمكنك إضافة entry_points لشحن النقاط هنا بنفس الطريقة
+        ],
+        states={
+            WAIT_BC: [MessageHandler(filters.TEXT & ~filters.COMMAND, do_bc)],
+        },
+        fallbacks=[CommandHandler("start", start)]
+    )
+
+    app.add_handler(admin_conv)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
+    
     app.run_polling()
 
 if __name__ == "__main__":
